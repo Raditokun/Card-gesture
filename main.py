@@ -1,3 +1,4 @@
+import os
 import sys
 from enum import Enum, auto
 import pygame
@@ -12,6 +13,9 @@ SCREEN_W = 1280
 SCREEN_H = 720
 FPS = 30
 
+# ── Paths ────────────────────────────────────────────────────────────────────
+ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets", "ui")
+
 # ── Palette ──────────────────────────────────────────────────────────────────
 COL_BG            = (18,  18,  24)
 COL_CURSOR        = (220, 225, 240)
@@ -24,13 +28,7 @@ COL_PLAY_ZONE_BDR = (60,  95, 110)
 COL_HAND_ZONE     = (35,  28,  45)
 COL_HAND_ZONE_BDR = (80,  60, 110)
 
-# Menu colours
 COL_MENU_BG       = (12,  10,  22)
-COL_TITLE          = (230, 200, 120)
-COL_BTN_FILL      = (40,  38,  60)
-COL_BTN_HOVER     = (65,  60, 100)
-COL_BTN_BORDER    = (120, 110, 180)
-COL_BTN_TEXT      = (220, 215, 240)
 COL_SUBTITLE      = (140, 135, 160)
 
 CURSOR_RADIUS     = 14
@@ -72,6 +70,53 @@ DECK_DATA = [
     {"name": "Buzzer Beater",       "cost": 4, "atk": 5, "hp": 5,
      "color": (218, 165, 32)},
 ]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  ASSET LOADER
+# ═════════════════════════════════════════════════════════════════════════════
+
+def load_assets() -> dict[str, pygame.Surface]:
+    """
+    Load all UI image assets from ``assets/ui/``.
+
+    * Backgrounds are smoothscaled to exactly (SCREEN_W, SCREEN_H).
+    * Button images keep their original size.
+    * Every image uses ``convert_alpha()`` for per-pixel transparency.
+
+    Returns a dict keyed by the base filename (without extension).
+    Prints a clear warning for any missing file instead of crashing.
+    """
+    manifest = {
+        # key            filename               is_background?
+        "bg_main":      ("bg_main.png",          True),
+        "bg_deck":      ("bg_deck.png",          True),
+        "bg_tutorial":  ("bg_tutorial.png",      True),
+        "btn_battle":   ("btn_battle.png",       False),
+        "btn_deck":     ("btn_deck.png",         False),
+        "btn_settings": ("btn_settings.png",     False),
+        "btn_back":     ("btn_back.png",         False),
+    }
+
+    assets: dict[str, pygame.Surface] = {}
+
+    for key, (filename, is_bg) in manifest.items():
+        path = os.path.join(ASSET_DIR, filename)
+        try:
+            img = pygame.image.load(path).convert_alpha()
+            if is_bg:
+                img = pygame.transform.smoothscale(img, (SCREEN_W, SCREEN_H))
+            assets[key] = img
+            print(f"[assets] Loaded {filename}  ({img.get_width()}×{img.get_height()})")
+        except (pygame.error, FileNotFoundError) as e:
+            print(f"[assets] WARNING: Could not load '{path}': {e}")
+            # Create a hot-pink placeholder so missing art is obvious
+            w, h = (SCREEN_W, SCREEN_H) if is_bg else (100, 100)
+            placeholder = pygame.Surface((w, h), pygame.SRCALPHA)
+            placeholder.fill((255, 0, 200, 180))
+            assets[key] = placeholder
+
+    return assets
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -211,39 +256,42 @@ class Card:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  UI BUTTON HELPER
+#  UI BUTTON (IMAGE-BASED)
 # ═════════════════════════════════════════════════════════════════════════════
 
 class UIButton:
     """
-    A simple rectangular button with hover highlight and label.
+    A clickable button backed by a PNG image asset.
 
     Parameters
     ----------
-    rect   : pygame.Rect  – clickable area.
-    label  : str           – text drawn centred inside the button.
-    font   : pygame.font.Font
+    image  : pygame.Surface – the button graphic (with alpha).
+    x, y   : int            – top-left position on screen.
     """
 
-    def __init__(self, rect: pygame.Rect, label: str,
-                 font: pygame.font.Font):
-        self.rect = rect
-        self.label = label
-        self.font = font
+    def __init__(self, image: pygame.Surface, x: int, y: int):
+        self.image = image
+        self.rect = pygame.Rect(x, y, image.get_width(), image.get_height())
         self.hovered = False
+
+        # Pre-build the hover highlight overlay (drawn behind the image)
+        self._hover_glow = pygame.Surface(
+            (self.rect.width + 12, self.rect.height + 12), pygame.SRCALPHA,
+        )
+        self._hover_glow.fill((255, 255, 255, 50))
 
     def update_hover(self, cx: float, cy: float) -> None:
         """Update the hover flag based on cursor position."""
         self.hovered = self.rect.collidepoint(int(cx), int(cy))
 
     def draw(self, surface: pygame.Surface) -> None:
-        """Render the button with optional hover highlight."""
-        fill = COL_BTN_HOVER if self.hovered else COL_BTN_FILL
-        pygame.draw.rect(surface, fill, self.rect, border_radius=8)
-        pygame.draw.rect(surface, COL_BTN_BORDER, self.rect,
-                         width=2, border_radius=8)
-        txt = self.font.render(self.label, True, COL_BTN_TEXT)
-        surface.blit(txt, txt.get_rect(center=self.rect.center))
+        """Blit the button image; show a soft glow when hovered."""
+        if self.hovered:
+            # Draw the glow rect centred behind the image
+            glow_x = self.rect.x - 6
+            glow_y = self.rect.y - 6
+            surface.blit(self._hover_glow, (glow_x, glow_y))
+        surface.blit(self.image, self.rect)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -304,37 +352,35 @@ def main():
     Card.init_fonts()
 
     # ── Fonts ────────────────────────────────────────────────────────────
-    font_title    = pygame.font.SysFont("Consolas", 52, bold=True)
-    font_subtitle = pygame.font.SysFont("Consolas", 18)
-    font_btn_lg   = pygame.font.SysFont("Consolas", 28, bold=True)
-    font_btn_sm   = pygame.font.SysFont("Consolas", 22, bold=True)
     font_hud      = pygame.font.SysFont("Consolas", 18)
     font_heading  = pygame.font.SysFont("Consolas", 36, bold=True)
     font_body     = pygame.font.SysFont("Consolas", 18)
+    font_subtitle = pygame.font.SysFont("Consolas", 18)
+
+    # ── Load image assets ────────────────────────────────────────────────
+    assets = load_assets()
 
     # ── Hand tracker ─────────────────────────────────────────────────────
     tracker = HandTracker(screen_width=SCREEN_W, screen_height=SCREEN_H)
 
-    # ── Menu buttons ─────────────────────────────────────────────────────
-    btn_start = UIButton(
-        pygame.Rect(SCREEN_W // 2 - 160, SCREEN_H // 2 - 30, 320, 60),
-        "START DUEL", font_btn_lg,
-    )
-    btn_deck = UIButton(
-        pygame.Rect(SCREEN_W // 2 - 200, SCREEN_H // 2 + 70, 180, 50),
-        "DECK", font_btn_sm,
-    )
-    btn_tutorial = UIButton(
-        pygame.Rect(SCREEN_W // 2 + 20, SCREEN_H // 2 + 70, 180, 50),
-        "TUTORIAL", font_btn_sm,
-    )
-    menu_buttons = [btn_start, btn_deck, btn_tutorial]
+    # ── Menu buttons (image-based) ───────────────────────────────────────
+    # Evenly space the 3 menu buttons near the bottom of the screen.
+    btn_imgs = [assets["btn_battle"], assets["btn_deck"], assets["btn_settings"]]
+    btn_gap = 60                          # horizontal gap between buttons
+    total_btn_w = sum(img.get_width() for img in btn_imgs) + btn_gap * 2
+    start_x = (SCREEN_W - total_btn_w) // 2
+    btn_y = SCREEN_H - 180                # vertical position
 
-    # ── Sub-menu back button ─────────────────────────────────────────────
-    btn_back = UIButton(
-        pygame.Rect(30, 24, 120, 44),
-        "← BACK", font_btn_sm,
-    )
+    menu_btns: list[UIButton] = []
+    x_cursor = start_x
+    for img in btn_imgs:
+        menu_btns.append(UIButton(img, x_cursor, btn_y))
+        x_cursor += img.get_width() + btn_gap
+
+    btn_battle, btn_deck, btn_settings = menu_btns
+
+    # ── Back button (sub-menus) ──────────────────────────────────────────
+    btn_back = UIButton(assets["btn_back"], 30, 24)
 
     # ── PLAYING state objects ────────────────────────────────────────────
     cards: list[Card] = build_hand(DECK_DATA)
@@ -348,7 +394,7 @@ def main():
     cursor_x: float = SCREEN_W / 2
     cursor_y: float = SCREEN_H / 2
     is_clicking: bool = False
-    prev_clicking: bool = False          # for rising-edge detection
+    prev_clicking: bool = False
 
     # ── Game loop ────────────────────────────────────────────────────────
     while running:
@@ -365,58 +411,38 @@ def main():
         # ── Gesture input (every state) ──────────────────────────────────
         prev_clicking = is_clicking
         cursor_x, cursor_y, is_clicking = tracker.get_cursor_state()
-        click_rising = is_clicking and not prev_clicking   # new pinch this frame
+        click_rising = is_clicking and not prev_clicking
         cx, cy = int(cursor_x), int(cursor_y)
 
         # ══════════════════════════════════════════════════════════════════
         #  STATE: MENU
         # ══════════════════════════════════════════════════════════════════
         if state == GameState.MENU:
-            # Update hover states
-            for btn in menu_buttons:
+            for btn in menu_btns:
                 btn.update_hover(cursor_x, cursor_y)
 
-            # Rising-edge click detection on buttons
             if click_rising:
-                if btn_start.hovered:
-                    # Reset the playing field for a fresh duel
+                if btn_battle.hovered:
                     cards = build_hand(DECK_DATA)
                     dragged_card = None
                     state = GameState.PLAYING
                 elif btn_deck.hovered:
                     state = GameState.DECK_SELECT
-                elif btn_tutorial.hovered:
+                elif btn_settings.hovered:
                     state = GameState.TUTORIAL
 
             # ── Draw MENU ────────────────────────────────────────────────
-            screen.fill(COL_MENU_BG)
+            screen.blit(assets["bg_main"], (0, 0))
 
-            # Decorative gradient bar at the top
-            bar = pygame.Surface((SCREEN_W, 4), pygame.SRCALPHA)
-            bar.fill((230, 200, 120, 180))
-            screen.blit(bar, (0, 0))
-
-            # Title
-            title_surf = font_title.render("SOARING CARAKA", True, COL_TITLE)
-            screen.blit(title_surf,
-                        title_surf.get_rect(center=(SCREEN_W // 2,
-                                                    SCREEN_H // 2 - 130)))
-            # Subtitle
-            sub_surf = font_subtitle.render(
-                "A Gesture-Controlled Card Battler", True, COL_SUBTITLE)
-            screen.blit(sub_surf,
-                        sub_surf.get_rect(center=(SCREEN_W // 2,
-                                                  SCREEN_H // 2 - 80)))
-            # Buttons
-            for btn in menu_buttons:
+            for btn in menu_btns:
                 btn.draw(screen)
 
-            # Hint text at the bottom
+            # Hint text at the very bottom
             hint = font_subtitle.render(
                 "Pinch to click  ·  Move your index finger to navigate",
                 True, COL_SUBTITLE)
             screen.blit(hint,
-                        hint.get_rect(center=(SCREEN_W // 2, SCREEN_H - 50)))
+                        hint.get_rect(center=(SCREEN_W // 2, SCREEN_H - 40)))
 
         # ══════════════════════════════════════════════════════════════════
         #  STATE: DECK SELECT
@@ -427,13 +453,13 @@ def main():
                 state = GameState.MENU
 
             # ── Draw DECK SELECT ─────────────────────────────────────────
-            screen.fill(COL_MENU_BG)
+            screen.blit(assets["bg_deck"], (0, 0))
 
-            heading = font_heading.render("DECK BUILDER", True, COL_TITLE)
+            heading = font_heading.render("DECK BUILDER", True, (255, 255, 255))
             screen.blit(heading,
                         heading.get_rect(center=(SCREEN_W // 2, 100)))
 
-            # Show the current deck as a card fan
+            # Card fan preview
             fan_x = (SCREEN_W - len(DECK_DATA) * (CARD_W + 20)) // 2
             for i, data in enumerate(DECK_DATA):
                 preview = Card(fan_x + i * (CARD_W + 20), 180, data)
@@ -441,7 +467,7 @@ def main():
 
             placeholder = font_body.render(
                 "Deck editing coming soon — your current deck is shown above.",
-                True, COL_SUBTITLE)
+                True, (200, 200, 210))
             screen.blit(placeholder,
                         placeholder.get_rect(center=(SCREEN_W // 2,
                                                      SCREEN_H - 100)))
@@ -456,9 +482,9 @@ def main():
                 state = GameState.MENU
 
             # ── Draw TUTORIAL ────────────────────────────────────────────
-            screen.fill(COL_MENU_BG)
+            screen.blit(assets["bg_tutorial"], (0, 0))
 
-            heading = font_heading.render("HOW TO PLAY", True, COL_TITLE)
+            heading = font_heading.render("HOW TO PLAY", True, (255, 255, 255))
             screen.blit(heading,
                         heading.get_rect(center=(SCREEN_W // 2, 80)))
 
@@ -472,7 +498,7 @@ def main():
                 "Good luck, Caraka!",
             ]
             for i, line in enumerate(tutorial_lines):
-                line_surf = font_body.render(line, True, COL_BTN_TEXT)
+                line_surf = font_body.render(line, True, (220, 215, 240))
                 screen.blit(line_surf, (100, 160 + i * 40))
 
             btn_back.draw(screen)
@@ -483,11 +509,9 @@ def main():
         elif state == GameState.PLAYING:
             if is_clicking:
                 if dragged_card is not None:
-                    # Continue dragging
                     dragged_card.x = cursor_x - dragged_card.width / 2
                     dragged_card.y = cursor_y - dragged_card.height / 2
                 else:
-                    # Try to grab the top-most card under the cursor
                     for card in reversed(cards):
                         if card.collidepoint(cursor_x, cursor_y):
                             card.is_dragging = True
@@ -496,7 +520,6 @@ def main():
                             card.y = cursor_y - card.height / 2
                             break
             else:
-                # ── Release / drop ───────────────────────────────────────
                 if dragged_card is not None:
                     dragged_card.is_dragging = False
                     card_cx, card_cy = dragged_card.center
@@ -514,13 +537,11 @@ def main():
             # ── Draw PLAYING ─────────────────────────────────────────────
             screen.fill(COL_BG)
 
-            # Zones
             draw_zone(screen, PLAY_ZONE_RECT,
                       COL_PLAY_ZONE, COL_PLAY_ZONE_BDR, "PLAY ZONE")
             draw_zone(screen, HAND_ZONE_RECT,
                       COL_HAND_ZONE, COL_HAND_ZONE_BDR, "HAND")
 
-            # Cards
             for card in cards:
                 card.draw(screen)
 
